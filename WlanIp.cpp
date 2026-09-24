@@ -20,6 +20,27 @@ constexpr UINT kExit = 100;
 std::wstring currentIp;
 HFONT font = nullptr;
 
+bool UseLightTheme() {
+    DWORD value = 0;
+    DWORD size = sizeof(value);
+    return RegGetValueW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size) == ERROR_SUCCESS
+        ? value != 0 : true;
+}
+
+void PositionAtBottomRight(HWND window) {
+    MONITORINFO info = { sizeof(info) };
+    HMONITOR monitor = MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY);
+    if (GetMonitorInfoW(monitor, &info)) {
+        const RECT& work = info.rcWork;
+        SetWindowPos(window, HWND_TOPMOST, work.right - kWidth - 16,
+            work.bottom - kHeight - 12, 0, 0,
+            SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+}
+
+
 std::wstring FindWirelessIpv4() {
     ULONG size = 0;
     constexpr ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
@@ -88,6 +109,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         Refresh(window);
         SetTimer(window, kTimer, kRefreshMs, nullptr);
         return 0;
+    case WM_DISPLAYCHANGE:
+    case WM_SETTINGCHANGE:
+        PositionAtBottomRight(window);
+        InvalidateRect(window, nullptr, TRUE);
+        return 0;
     case WM_TIMER:
         if (wParam == kTimer) Refresh(window);
         return 0;
@@ -96,22 +122,21 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         HDC dc = BeginPaint(window, &paint);
         RECT area;
         GetClientRect(window, &area);
-        HBRUSH brush = CreateSolidBrush(RGB(24, 24, 27));
+        const bool light = UseLightTheme();
+        HBRUSH brush = CreateSolidBrush(light ? RGB(241, 243, 245) : RGB(45, 48, 54));
         FillRect(dc, &area, brush);
         DeleteObject(brush);
         SetBkMode(dc, TRANSPARENT);
         if (font) SelectObject(dc, font);
         std::wstring label = currentIp.empty() ? L"● 未连接" : L"● " + currentIp;
-        SetTextColor(dc, currentIp.empty() ? RGB(161, 161, 170) : RGB(134, 239, 172));
+        SetTextColor(dc, currentIp.empty()
+            ? (light ? RGB(107, 114, 128) : RGB(161, 161, 170))
+            : (light ? RGB(31, 92, 68) : RGB(165, 235, 194)));
         area.left += 14;
         DrawTextW(dc, label.c_str(), -1, &area, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
         EndPaint(window, &paint);
         return 0;
     }
-    case WM_LBUTTONDOWN:
-        ReleaseCapture();
-        SendMessageW(window, WM_NCLBUTTONDOWN, HTCAPTION, 0);
-        return 0;
     case WM_LBUTTONDBLCLK:
         CopyIp(window);
         return 0;
@@ -148,9 +173,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     if (!RegisterClassW(&cls)) return 1;
 
     HWND window = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, className,
-        L"WLAN IP", WS_POPUP, 30, 30, kWidth, kHeight, nullptr, nullptr, instance, nullptr);
+        L"WLAN IP", WS_POPUP, 0, 0, kWidth, kHeight, nullptr, nullptr, instance, nullptr);
     if (!window) return 1;
-    ShowWindow(window, SW_SHOWNOACTIVATE);
+    PositionAtBottomRight(window);
     UpdateWindow(window);
 
     MSG message;
