@@ -5,6 +5,7 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <iphlpapi.h>
+#include <dwmapi.h>
 #include <string>
 #include <cstring>
 #include <cwchar>
@@ -16,6 +17,7 @@
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "dwmapi.lib")
 
 namespace {
 constexpr int kInitialWidth = 185;
@@ -66,33 +68,43 @@ BOOL CALLBACK FindDesktopView(HWND top, LPARAM data) {
     return TRUE;
 }
 
-bool DesktopIsForeground(HWND window) {
-    HWND foreground = GetForegroundWindow();
-    if (!foreground) return false;
-    HWND top = GetAncestor(foreground, GA_ROOT);
-    if (top == window || foreground == window) return true;
-    if (IsIconic(top)) return true;
-    if (top == GetShellWindow()) return true;
-    if (desktopView && IsWindow(desktopView) &&
-        top == GetAncestor(desktopView, GA_ROOT)) return true;
+bool DesktopVisibleAtWidget(HWND window) {
+    RECT widget = {};
+    GetWindowRect(window, &widget);
+    HWND desktopRoot = desktopView && IsWindow(desktopView)
+        ? GetAncestor(desktopView, GA_ROOT) : GetShellWindow();
 
-    wchar_t className[64] = {};
-    GetClassNameW(top, className, 64);
-    return wcscmp(className, L"Progman") == 0 ||
-           wcscmp(className, L"WorkerW") == 0 ||
-           wcscmp(className, L"Shell_TrayWnd") == 0;
+    // Inspect windows from front to back. Only windows above the desktop
+    // can cover the widget; menus and other shell surfaces are ignored.
+    for (HWND candidate = GetTopWindow(nullptr); candidate;
+         candidate = GetWindow(candidate, GW_HWNDNEXT)) {
+        if (candidate == desktopRoot) return true;
+        if (candidate == window || !IsWindowVisible(candidate) || IsIconic(candidate))
+            continue;
+        wchar_t className[64] = {};
+        GetClassNameW(candidate, className, 64);
+        if (wcscmp(className, L"Progman") == 0 ||
+            wcscmp(className, L"WorkerW") == 0 ||
+            wcscmp(className, L"Shell_TrayWnd") == 0 ||
+            wcscmp(className, L"Shell_SecondaryTrayWnd") == 0 ||
+            wcscmp(className, L"#32768") == 0) continue;
+
+        DWORD cloaked = 0;
+        if (DwmGetWindowAttribute(candidate, DWMWA_CLOAKED,
+                                  &cloaked, sizeof(cloaked)) == S_OK && cloaked)
+            continue;
+        RECT bounds = {};
+        RECT overlap = {};
+        if (GetWindowRect(candidate, &bounds) &&
+            IntersectRect(&overlap, &widget, &bounds))
+            return false;
+    }
+    return true;
 }
 
 void UpdateVisibility(HWND window) {
     if (menuOpen) return;
-    HWND foreground = GetForegroundWindow();
-    if (foreground) {
-        wchar_t className[64] = {};
-        GetClassNameW(GetAncestor(foreground, GA_ROOT), className, 64);
-        // A desktop context menu temporarily takes the foreground.
-        if (wcscmp(className, L"#32768") == 0) return;
-    }
-    bool visible = DesktopIsForeground(window);
+    bool visible = DesktopVisibleAtWidget(window);
     if (visible != (IsWindowVisible(window) != FALSE))
         ShowWindow(window, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
 }
