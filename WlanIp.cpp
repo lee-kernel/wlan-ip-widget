@@ -47,7 +47,7 @@ bool AutoStartEnabled() {
 LONG SetAutoStart(bool enabled) {
     if (!enabled)
         return RegDeleteKeyValueW(HKEY_CURRENT_USER, kRunKey, kRunName);
-    std::wstring path(32768, L'\\0');
+    std::wstring path(32768, L'\0');
     DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
     if (length == 0 || length >= path.size())
         return ERROR_FILENAME_EXCED_RANGE;
