@@ -26,12 +26,36 @@ constexpr UINT_PTR kVisibilityTimer = 2;
 constexpr UINT kRefreshMs = 3000;
 constexpr UINT kToggleWarning = 100;
 constexpr UINT kExit = 101;
+constexpr UINT kAutoStart = 102;
+constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+constexpr wchar_t kRunName[] = L"WlanIpWidget";
 constexpr wchar_t kSettings[] = L"Software\\WlanIpWidget";
 bool showWarning = false;
+bool autoStart = false;
 bool menuOpen = false;
 HWND desktopView = nullptr;
 std::wstring currentIp;
 HFONT font = nullptr;
+
+bool AutoStartEnabled() {
+    wchar_t command[32768] = {};
+    DWORD bytes = sizeof(command);
+    return RegGetValueW(HKEY_CURRENT_USER, kRunKey, kRunName, RRF_RT_REG_SZ,
+                        nullptr, command, &bytes) == ERROR_SUCCESS;
+}
+
+LONG SetAutoStart(bool enabled) {
+    if (!enabled)
+        return RegDeleteKeyValueW(HKEY_CURRENT_USER, kRunKey, kRunName);
+    std::wstring path(32768, L'\\0');
+    DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    if (length == 0 || length >= path.size())
+        return ERROR_FILENAME_EXCED_RANGE;
+    path.resize(length);
+    std::wstring command = L"\"" + path + L"\"";
+    return RegSetKeyValueW(HKEY_CURRENT_USER, kRunKey, kRunName, REG_SZ,
+                           command.c_str(), static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)));
+}
 
 BOOL CALLBACK FindDesktopView(HWND top, LPARAM data) {
     HWND view = FindWindowExW(top, nullptr, L"SHELLDLL_DefView", nullptr);
@@ -208,6 +232,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         HMENU menu = CreatePopupMenu();
         AppendMenuW(menu, MF_STRING | (showWarning ? MF_CHECKED : MF_UNCHECKED),
                     kToggleWarning, L"显示严禁处理涉密信息");
+        AppendMenuW(menu, MF_STRING | (autoStart ? MF_CHECKED : MF_UNCHECKED),
+                    kAutoStart, L"开机自启动");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING, kExit, L"退出");
         POINT point;
@@ -227,6 +253,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
             ResizeToContent(window);
             PositionAtBottomRight(window);
             InvalidateRect(window, nullptr, TRUE);
+        } else if (command == kAutoStart) {
+            LONG error = SetAutoStart(!autoStart);
+            if (error == ERROR_SUCCESS) autoStart = !autoStart;
+            else MessageBoxW(window, L"设置开机自启动失败。", L"WLAN IP", MB_OK | MB_ICONERROR);
         } else if (command == kExit) DestroyWindow(window);
         return 0;
     }
@@ -252,6 +282,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         return 0;
     }
     EnumWindows(FindDesktopView, reinterpret_cast<LPARAM>(&desktopView));
+    autoStart = AutoStartEnabled();
     DWORD saved = 0;
     DWORD bytes = sizeof(saved);
     if (RegGetValueW(HKEY_CURRENT_USER, kSettings, L"ShowWarning", RRF_RT_REG_DWORD,
