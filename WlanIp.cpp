@@ -17,8 +17,8 @@
 #pragma comment(lib, "gdi32.lib")
 
 namespace {
-constexpr int kWidth = 205;
-constexpr int kHeight = 38;
+constexpr int kWidth = 185;
+constexpr int kHeight = 32;
 constexpr UINT_PTR kTimer = 1;
 constexpr UINT kRefreshMs = 3000;
 constexpr UINT kExit = 100;
@@ -39,8 +39,8 @@ void PositionAtBottomRight(HWND window) {
     HMONITOR monitor = MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY);
     if (GetMonitorInfoW(monitor, &info)) {
         const RECT& work = info.rcWork;
-        SetWindowPos(window, HWND_TOPMOST, work.right - kWidth - 16,
-            work.bottom - kHeight - 12, 0, 0,
+        SetWindowPos(window, HWND_TOPMOST, work.right - kWidth - 12,
+            work.bottom - kHeight - 10, 0, 0,
             SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 }
@@ -108,7 +108,7 @@ void CopyIp(HWND window) {
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
     case WM_CREATE:
-        font = CreateFontW(-18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        font = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                            CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
         Refresh(window);
@@ -128,16 +128,14 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         RECT area;
         GetClientRect(window, &area);
         const bool light = UseLightTheme();
-        HBRUSH brush = CreateSolidBrush(light ? RGB(241, 243, 245) : RGB(45, 48, 54));
+        HBRUSH brush = CreateSolidBrush(light ? RGB(245, 246, 248) : RGB(228, 231, 235));
         FillRect(dc, &area, brush);
         DeleteObject(brush);
         SetBkMode(dc, TRANSPARENT);
         if (font) SelectObject(dc, font);
         std::wstring label = currentIp.empty() ? L"● 未连接" : L"● " + currentIp;
-        SetTextColor(dc, currentIp.empty()
-            ? (light ? RGB(107, 114, 128) : RGB(161, 161, 170))
-            : (light ? RGB(31, 92, 68) : RGB(165, 235, 194)));
-        area.left += 14;
+        SetTextColor(dc, RGB(20, 20, 20));
+        area.left += 10;
         DrawTextW(dc, label.c_str(), -1, &area, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
         EndPaint(window, &paint);
         return 0;
@@ -177,9 +175,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     cls.style = CS_DBLCLKS;
     if (!RegisterClassW(&cls)) return 1;
 
-    HWND window = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, className,
+    HWND window = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED, className,
         L"WLAN IP", WS_POPUP, 0, 0, kWidth, kHeight, nullptr, nullptr, instance, nullptr);
     if (!window) return 1;
+    SetLayeredWindowAttributes(window, 0, 226, LWA_ALPHA);
     PositionAtBottomRight(window);
     UpdateWindow(window);
 
