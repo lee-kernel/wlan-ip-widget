@@ -20,7 +20,7 @@ jobs:
         shell: cmd
         run: |
           if not exist publish mkdir publish
-          cl /nologo /O2 /MT /std:c++17 /DUNICODE /D_UNICODE /Fo:publish\ /Fe:publish\WlanIp.exe WlanIp.cpp /link /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF
+          cl /nologo /utf-8 /O2 /MT /std:c++17 /DUNICODE /D_UNICODE /Fo:publish\ /Fe:publish\WlanIp.exe WlanIp.cpp /link /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF
       - uses: actions/upload-artifact@v4
         with:
           name: WlanIp-win-x64
