@@ -28,6 +28,8 @@ constexpr UINT kExit = 101;
 constexpr wchar_t kSettings[] = L"Software\\WlanIpWidget";
 bool showWarning = false;
 HWND desktopView = nullptr;
+std::wstring currentIp;
+HFONT font = nullptr;
 
 BOOL CALLBACK FindDesktopView(HWND top, LPARAM data) {
     HWND view = FindWindowExW(top, nullptr, L"SHELLDLL_DefView", nullptr);
@@ -70,17 +72,6 @@ void ResizeToContent(HWND window) {
     width = size.cx + 20;
 }
 
-std::wstring currentIp;
-HFONT font = nullptr;
-
-bool UseLightTheme() {
-    DWORD value = 0;
-    DWORD size = sizeof(value);
-    return RegGetValueW(HKEY_CURRENT_USER,
-        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-        L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size) == ERROR_SUCCESS
-        ? value != 0 : true;
-}
 
 void PositionAtBottomRight(HWND window) {
     MONITORINFO info = { sizeof(info) };
@@ -229,6 +220,15 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
+    HANDLE singleInstance = CreateMutexW(nullptr, TRUE, L"Local\\WlanIpWidget.SingleInstance");
+    if (!singleInstance) {
+        MessageBoxW(nullptr, L"单实例检查失败。", L"WLAN IP", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(singleInstance);
+        return 0;
+    }
     EnumWindows(FindDesktopView, reinterpret_cast<LPARAM>(&desktopView));
     DWORD saved = 0;
     DWORD bytes = sizeof(saved);
@@ -268,5 +268,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
+    CloseHandle(singleInstance);
     return static_cast<int>(message.wParam);
 }
