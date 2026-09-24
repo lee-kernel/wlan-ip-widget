@@ -27,6 +27,7 @@ constexpr UINT kToggleWarning = 100;
 constexpr UINT kExit = 101;
 constexpr wchar_t kSettings[] = L"Software\\WlanIpWidget";
 bool showWarning = false;
+bool menuOpen = false;
 HWND desktopView = nullptr;
 std::wstring currentIp;
 HFONT font = nullptr;
@@ -49,6 +50,7 @@ bool DesktopIsForeground() {
 }
 
 void UpdateVisibility(HWND window) {
+    if (menuOpen) return;
     bool visible = DesktopIsForeground();
     if (visible != (IsWindowVisible(window) != FALSE))
         ShowWindow(window, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
@@ -193,10 +195,13 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         AppendMenuW(menu, MF_STRING, kExit, L"退出");
         POINT point;
         GetCursorPos(&point);
+        menuOpen = true;
         SetForegroundWindow(window);
         UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                       point.x, point.y, 0, window, nullptr);
         DestroyMenu(menu);
+        menuOpen = false;
+        PostMessageW(window, WM_NULL, 0, 0);
         if (command == kToggleWarning) {
             showWarning = !showWarning;
             DWORD value = showWarning ? 1 : 0;
