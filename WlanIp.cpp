@@ -4,6 +4,8 @@
 #include <iphlpapi.h>
 #include <ws2tcpip.h>
 #include <string>
+#include <cstring>
+#include <utility>
 #include <vector>
 
 #pragma comment(lib, "iphlpapi.lib")
