@@ -21,6 +21,7 @@ namespace {
 constexpr int kHeight = 30;
 constexpr int kPadding = 8;
 constexpr UINT_PTR kTimer = 1;
+constexpr UINT_PTR kVisibilityTimer = 2;
 constexpr UINT kRefreshMs = 3000;
 constexpr UINT kToggleWarning = 100;
 constexpr UINT kExit = 101;
@@ -78,14 +79,28 @@ std::wstring Label() {
     return label;
 }
 
+bool DesktopIsForeground() {
+    HWND foreground = GetForegroundWindow();
+    if (!foreground) return false;
+    HWND top = GetAncestor(foreground, GA_ROOT);
+    HWND shell = GetShellWindow();
+    if (top == shell) return true;
+    return desktopView && top == GetAncestor(desktopView, GA_ROOT);
+}
+
+void UpdateVisibility(HWND window) {
+    bool visible = DesktopIsForeground();
+    if (visible != (IsWindowVisible(window) != FALSE))
+        ShowWindow(window, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
+}
+
 void Position(HWND window) {
     MONITORINFO monitor = { sizeof(monitor) };
-    if (!GetMonitorInfoW(MonitorFromWindow(desktopView, MONITOR_DEFAULTTOPRIMARY), &monitor))
+    if (!GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY), &monitor))
         return;
     POINT location = { monitor.rcWork.right - width - 12, monitor.rcWork.bottom - kHeight - 10 };
-    MapWindowPoints(nullptr, desktopView, &location, 1);
     SetWindowPos(window, nullptr, location.x, location.y, width, kHeight,
-                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                 SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 void Draw(HWND window) {
@@ -176,11 +191,14 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                            ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
         SetTimer(window, kTimer, kRefreshMs, nullptr);
+        SetTimer(window, kVisibilityTimer, 200, nullptr);
         return 0;
     case WM_TIMER:
         if (wParam == kTimer) {
             Refresh(window);
             Position(window);
+        } else if (wParam == kVisibilityTimer) {
+            UpdateVisibility(window);
         }
         return 0;
     case WM_DISPLAYCHANGE:
@@ -214,6 +232,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     }
     case WM_DESTROY:
         KillTimer(window, kTimer);
+        KillTimer(window, kVisibilityTimer);
         if (font) DeleteObject(font);
         PostQuitMessage(0);
         return 0;
@@ -224,11 +243,6 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     EnumWindows(FindDesktopView, reinterpret_cast<LPARAM>(&desktopView));
-    if (!desktopView) {
-        MessageBoxW(nullptr, L"无法找到 Windows 桌面，请确认 Explorer 正在运行。",
-                    L"WLAN IP", MB_OK | MB_ICONERROR);
-        return 1;
-    }
     DWORD saved = 0;
     DWORD bytes = sizeof(saved);
     if (RegGetValueW(HKEY_CURRENT_USER, kSettings, L"ShowWarning", RRF_RT_REG_DWORD,
@@ -242,13 +256,22 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     cls.lpszClassName = className;
     cls.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     cls.style = CS_DBLCLKS;
-    if (!RegisterClassW(&cls)) return 1;
+    if (!RegisterClassW(&cls)) {
+        MessageBoxW(nullptr, L"注册窗口失败。", L"WLAN IP", MB_OK | MB_ICONERROR);
+        return 1;
+    }
     HWND window = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE,
-        className, L"WLAN IP", WS_CHILD | WS_VISIBLE, 0, 0, width, kHeight,
-        desktopView, nullptr, instance, nullptr);
-    if (!window) return 1;
+        className, L"WLAN IP", WS_POPUP, 0, 0, width, kHeight,
+        nullptr, nullptr, instance, nullptr);
+    if (!window) {
+        DWORD error = GetLastError();
+        std::wstring message = L"创建窗口失败，错误码：" + std::to_wstring(error);
+        MessageBoxW(nullptr, message.c_str(), L"WLAN IP", MB_OK | MB_ICONERROR);
+        return 1;
+    }
     Refresh(window);
     Draw(window);
+    UpdateVisibility(window);
     MSG message;
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
         TranslateMessage(&message);
