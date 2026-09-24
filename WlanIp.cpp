@@ -5,9 +5,8 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <iphlpapi.h>
-#include <algorithm>
-#include <cstring>
 #include <string>
+#include <cstring>
 #include <utility>
 #include <vector>
 
@@ -18,39 +17,45 @@
 #pragma comment(lib, "gdi32.lib")
 
 namespace {
-constexpr int kHeight = 30;
-constexpr int kPadding = 8;
+constexpr int kWidth = 185;
+constexpr int kHeight = 32;
 constexpr UINT_PTR kTimer = 1;
-constexpr UINT_PTR kVisibilityTimer = 2;
 constexpr UINT kRefreshMs = 3000;
-constexpr UINT kToggleWarning = 100;
-constexpr UINT kExit = 101;
-constexpr wchar_t kSettings[] = L"Software\\WlanIpWidget";
+constexpr UINT kExit = 100;
 std::wstring currentIp;
-bool showWarning = false;
-int width = 130;
 HFONT font = nullptr;
-HWND desktopView = nullptr;
 
-BOOL CALLBACK FindDesktopView(HWND top, LPARAM data) {
-    HWND view = FindWindowExW(top, nullptr, L"SHELLDLL_DefView", nullptr);
-    if (view) {
-        *reinterpret_cast<HWND*>(data) = view;
-        return FALSE;
-    }
-    return TRUE;
+bool UseLightTheme() {
+    DWORD value = 0;
+    DWORD size = sizeof(value);
+    return RegGetValueW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size) == ERROR_SUCCESS
+        ? value != 0 : true;
 }
+
+void PositionAtBottomRight(HWND window) {
+    MONITORINFO info = { sizeof(info) };
+    HMONITOR monitor = MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY);
+    if (GetMonitorInfoW(monitor, &info)) {
+        const RECT& work = info.rcWork;
+        SetWindowPos(window, HWND_TOPMOST, work.right - kWidth - 12,
+            work.bottom - kHeight - 10, 0, 0,
+            SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+}
+
 
 std::wstring FindWirelessIpv4() {
     ULONG size = 0;
     constexpr ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
                             GAA_FLAG_SKIP_DNS_SERVER;
-    if (GetAdaptersAddresses(AF_INET, flags, nullptr, nullptr, &size) != ERROR_BUFFER_OVERFLOW)
-        return L"";
+    ULONG result = GetAdaptersAddresses(AF_INET, flags, nullptr, nullptr, &size);
+    if (result != ERROR_BUFFER_OVERFLOW) return L"";
     for (int attempt = 0; attempt < 3; ++attempt) {
         std::vector<BYTE> buffer(size);
         auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
-        ULONG result = GetAdaptersAddresses(AF_INET, flags, nullptr, adapters, &size);
+        result = GetAdaptersAddresses(AF_INET, flags, nullptr, adapters, &size);
         if (result == ERROR_BUFFER_OVERFLOW) continue;
         if (result != NO_ERROR) return L"";
         for (auto* adapter = adapters; adapter; adapter = adapter->Next) {
@@ -58,11 +63,12 @@ std::wstring FindWirelessIpv4() {
                 continue;
             for (auto* address = adapter->FirstUnicastAddress; address; address = address->Next) {
                 if (!address->Address.lpSockaddr ||
-                    address->Address.lpSockaddr->sa_family != AF_INET) continue;
+                    address->Address.lpSockaddr->sa_family != AF_INET)
+                    continue;
                 auto* ipv4 = reinterpret_cast<sockaddr_in*>(address->Address.lpSockaddr);
                 const BYTE* bytes = reinterpret_cast<const BYTE*>(&ipv4->sin_addr);
-                if ((bytes[0] == 169 && bytes[1] == 254) || bytes[0] == 127 || bytes[0] == 0)
-                    continue;
+                if (bytes[0] == 169 && bytes[1] == 254) continue;
+                if (bytes[0] == 127 || bytes[0] == 0) continue;
                 wchar_t ip[INET_ADDRSTRLEN] = {};
                 if (InetNtopW(AF_INET, &ipv4->sin_addr, ip, INET_ADDRSTRLEN))
                     return ip;
@@ -73,96 +79,11 @@ std::wstring FindWirelessIpv4() {
     return L"";
 }
 
-std::wstring Label() {
-    std::wstring label = currentIp.empty() ? L"未连接" : currentIp;
-    if (showWarning) label += L"  严禁处理涉密信息";
-    return label;
-}
-
-bool DesktopIsForeground() {
-    HWND foreground = GetForegroundWindow();
-    if (!foreground) return false;
-    HWND top = GetAncestor(foreground, GA_ROOT);
-    HWND shell = GetShellWindow();
-    if (top == shell) return true;
-    return desktopView && top == GetAncestor(desktopView, GA_ROOT);
-}
-
-void UpdateVisibility(HWND window) {
-    bool visible = DesktopIsForeground();
-    if (visible != (IsWindowVisible(window) != FALSE))
-        ShowWindow(window, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
-}
-
-void Position(HWND window) {
-    MONITORINFO monitor = { sizeof(monitor) };
-    if (!GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY), &monitor))
-        return;
-    POINT location = { monitor.rcWork.right - width - 12, monitor.rcWork.bottom - kHeight - 10 };
-    SetWindowPos(window, nullptr, location.x, location.y, width, kHeight,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
-}
-
-void Draw(HWND window) {
-    if (!font) return;
-    std::wstring label = Label();
-    HDC screen = GetDC(nullptr);
-    HDC dc = CreateCompatibleDC(screen);
-    HGDIOBJ previousFont = SelectObject(dc, font);
-    SIZE measured = {};
-    GetTextExtentPoint32W(dc, label.c_str(), static_cast<int>(label.size()), &measured);
-    width = measured.cx + 2 * kPadding;
-    SelectObject(dc, previousFont);
-    DeleteDC(dc);
-
-    Position(window);
-    RECT bounds;
-    GetWindowRect(window, &bounds);
-    POINT destination = { bounds.left, bounds.top };
-    HDC memory = CreateCompatibleDC(screen);
-    BITMAPINFO bitmap = {};
-    bitmap.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bitmap.bmiHeader.biWidth = width;
-    bitmap.bmiHeader.biHeight = -kHeight;
-    bitmap.bmiHeader.biPlanes = 1;
-    bitmap.bmiHeader.biBitCount = 32;
-    bitmap.bmiHeader.biCompression = BI_RGB;
-    void* pixels = nullptr;
-    HBITMAP image = CreateDIBSection(screen, &bitmap, DIB_RGB_COLORS, &pixels, nullptr, 0);
-    if (image && pixels) {
-        HGDIOBJ oldImage = SelectObject(memory, image);
-        RECT area = { 0, 0, width, kHeight };
-        FillRect(memory, &area, reinterpret_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
-        HGDIOBJ oldFont = SelectObject(memory, font);
-        SetBkMode(memory, TRANSPARENT);
-        SetTextColor(memory, RGB(0, 0, 0));
-        area.left = kPadding;
-        DrawTextW(memory, label.c_str(), -1, &area, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
-        GdiFlush();
-        auto* bytes = static_cast<BYTE*>(pixels);
-        for (int i = 0; i < width * kHeight; ++i) {
-            BYTE opacity = static_cast<BYTE>(255 - std::min({ bytes[i * 4], bytes[i * 4 + 1], bytes[i * 4 + 2] }));
-            bytes[i * 4] = bytes[i * 4 + 1] = bytes[i * 4 + 2] = 0;
-            bytes[i * 4 + 3] = opacity;
-        }
-        POINT origin = { 0, 0 };
-        SIZE size = { width, kHeight };
-        BLENDFUNCTION blend = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
-        UpdateLayeredWindow(window, screen, &destination, &size, memory, &origin,
-                            0, &blend, ULW_ALPHA);
-        SelectObject(memory, oldFont);
-        SelectObject(memory, oldImage);
-        DeleteObject(image);
-    }
-    DeleteDC(memory);
-    ReleaseDC(nullptr, screen);
-}
-
 void Refresh(HWND window) {
     auto next = FindWirelessIpv4();
     if (next != currentIp) {
         currentIp = std::move(next);
-        Draw(window);
+        InvalidateRect(window, nullptr, TRUE);
     }
 }
 
@@ -177,7 +98,7 @@ void CopyIp(HWND window) {
             memcpy(destination, currentIp.c_str(), bytes);
             GlobalUnlock(memory);
             if (SetClipboardData(CF_UNICODETEXT, memory))
-                memory = nullptr;
+                memory = nullptr; // Clipboard takes ownership.
         }
         if (memory) GlobalFree(memory);
     }
@@ -189,50 +110,53 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     case WM_CREATE:
         font = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                           ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
+                           CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
+        Refresh(window);
         SetTimer(window, kTimer, kRefreshMs, nullptr);
-        SetTimer(window, kVisibilityTimer, 200, nullptr);
-        return 0;
-    case WM_TIMER:
-        if (wParam == kTimer) {
-            Refresh(window);
-            Position(window);
-        } else if (wParam == kVisibilityTimer) {
-            UpdateVisibility(window);
-        }
         return 0;
     case WM_DISPLAYCHANGE:
     case WM_SETTINGCHANGE:
-        Position(window);
+        PositionAtBottomRight(window);
+        InvalidateRect(window, nullptr, TRUE);
         return 0;
+    case WM_TIMER:
+        if (wParam == kTimer) Refresh(window);
+        return 0;
+    case WM_PAINT: {
+        PAINTSTRUCT paint;
+        HDC dc = BeginPaint(window, &paint);
+        RECT area;
+        GetClientRect(window, &area);
+        const bool light = UseLightTheme();
+        HBRUSH brush = CreateSolidBrush(light ? RGB(245, 246, 248) : RGB(228, 231, 235));
+        FillRect(dc, &area, brush);
+        DeleteObject(brush);
+        SetBkMode(dc, TRANSPARENT);
+        if (font) SelectObject(dc, font);
+        std::wstring label = currentIp.empty() ? L"● 未连接" : L"● " + currentIp;
+        SetTextColor(dc, RGB(20, 20, 20));
+        area.left += 10;
+        DrawTextW(dc, label.c_str(), -1, &area, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
+        EndPaint(window, &paint);
+        return 0;
+    }
     case WM_LBUTTONDBLCLK:
         CopyIp(window);
         return 0;
     case WM_CONTEXTMENU: {
         HMENU menu = CreatePopupMenu();
-        AppendMenuW(menu, MF_STRING | (showWarning ? MF_CHECKED : MF_UNCHECKED),
-                    kToggleWarning, L"显示严禁处理涉密信息");
-        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING, kExit, L"退出");
         POINT point;
         GetCursorPos(&point);
+        SetForegroundWindow(window);
         UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                       point.x, point.y, 0, window, nullptr);
         DestroyMenu(menu);
-        if (command == kToggleWarning) {
-            showWarning = !showWarning;
-            DWORD value = showWarning ? 1 : 0;
-            RegSetKeyValueW(HKEY_CURRENT_USER, kSettings, L"ShowWarning",
-                            REG_DWORD, &value, sizeof(value));
-            Draw(window);
-        } else if (command == kExit) {
-            DestroyWindow(window);
-        }
+        if (command == kExit) DestroyWindow(window);
         return 0;
     }
     case WM_DESTROY:
         KillTimer(window, kTimer);
-        KillTimer(window, kVisibilityTimer);
         if (font) DeleteObject(font);
         PostQuitMessage(0);
         return 0;
@@ -242,13 +166,6 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
-    EnumWindows(FindDesktopView, reinterpret_cast<LPARAM>(&desktopView));
-    DWORD saved = 0;
-    DWORD bytes = sizeof(saved);
-    if (RegGetValueW(HKEY_CURRENT_USER, kSettings, L"ShowWarning", RRF_RT_REG_DWORD,
-                     nullptr, &saved, &bytes) == ERROR_SUCCESS)
-        showWarning = saved != 0;
-
     const wchar_t className[] = L"WlanIpWidgetWindow";
     WNDCLASSW cls = {};
     cls.lpfnWndProc = WindowProc;
@@ -256,22 +173,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     cls.lpszClassName = className;
     cls.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     cls.style = CS_DBLCLKS;
-    if (!RegisterClassW(&cls)) {
-        MessageBoxW(nullptr, L"注册窗口失败。", L"WLAN IP", MB_OK | MB_ICONERROR);
-        return 1;
-    }
-    HWND window = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE,
-        className, L"WLAN IP", WS_POPUP, 0, 0, width, kHeight,
-        nullptr, nullptr, instance, nullptr);
-    if (!window) {
-        DWORD error = GetLastError();
-        std::wstring message = L"创建窗口失败，错误码：" + std::to_wstring(error);
-        MessageBoxW(nullptr, message.c_str(), L"WLAN IP", MB_OK | MB_ICONERROR);
-        return 1;
-    }
-    Refresh(window);
-    Draw(window);
-    UpdateVisibility(window);
+    if (!RegisterClassW(&cls)) return 1;
+
+    HWND window = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED, className,
+        L"WLAN IP", WS_POPUP, 0, 0, kWidth, kHeight, nullptr, nullptr, instance, nullptr);
+    if (!window) return 1;
+    SetLayeredWindowAttributes(window, 0, 226, LWA_ALPHA);
+    PositionAtBottomRight(window);
+    UpdateWindow(window);
+
     MSG message;
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
         TranslateMessage(&message);
