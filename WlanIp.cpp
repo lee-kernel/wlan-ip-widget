@@ -7,6 +7,7 @@
 #include <iphlpapi.h>
 #include <string>
 #include <cstring>
+#include <cwchar>
 #include <utility>
 #include <vector>
 
@@ -41,17 +42,33 @@ BOOL CALLBACK FindDesktopView(HWND top, LPARAM data) {
     return TRUE;
 }
 
-bool DesktopIsForeground() {
+bool DesktopIsForeground(HWND window) {
     HWND foreground = GetForegroundWindow();
     if (!foreground) return false;
     HWND top = GetAncestor(foreground, GA_ROOT);
+    if (top == window || foreground == window) return true;
+    if (IsIconic(top)) return true;
     if (top == GetShellWindow()) return true;
-    return desktopView && IsWindow(desktopView) && top == GetAncestor(desktopView, GA_ROOT);
+    if (desktopView && IsWindow(desktopView) &&
+        top == GetAncestor(desktopView, GA_ROOT)) return true;
+
+    wchar_t className[64] = {};
+    GetClassNameW(top, className, 64);
+    return wcscmp(className, L"Progman") == 0 ||
+           wcscmp(className, L"WorkerW") == 0 ||
+           wcscmp(className, L"Shell_TrayWnd") == 0;
 }
 
 void UpdateVisibility(HWND window) {
     if (menuOpen) return;
-    bool visible = DesktopIsForeground();
+    HWND foreground = GetForegroundWindow();
+    if (foreground) {
+        wchar_t className[64] = {};
+        GetClassNameW(GetAncestor(foreground, GA_ROOT), className, 64);
+        // A desktop context menu temporarily takes the foreground.
+        if (wcscmp(className, L"#32768") == 0) return;
+    }
+    bool visible = DesktopIsForeground(window);
     if (visible != (IsWindowVisible(window) != FALSE))
         ShowWindow(window, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
 }
